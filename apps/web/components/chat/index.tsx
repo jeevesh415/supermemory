@@ -21,7 +21,6 @@ import {
 	Check,
 	ChevronDownIcon,
 	HistoryIcon,
-	PanelRightCloseIcon,
 	Plus,
 	SearchIcon,
 	SquarePenIcon,
@@ -33,9 +32,12 @@ import { cn } from "@lib/utils"
 import { dmSansClassName } from "@/lib/fonts"
 import ChatInput from "./input"
 import ChatModelSelector from "./model-selector"
+import { getNovaChatErrorCopy } from "@/lib/chat-stream-error"
 import { GradientLogo, LogoBgGradient } from "@ui/assets/Logo"
 import { useProject } from "@/stores"
-import type { ModelId } from "@/lib/models"
+import { useContainerTags } from "@/hooks/use-container-tags"
+import { getChatSpaceDisplayLabel } from "@/lib/chat-space-label"
+import { modelNames, type ModelId } from "@/lib/models"
 import { SuperLoader } from "../superloader"
 import { UserMessage } from "./message/user-message"
 import { AgentMessage } from "./message/agent-message"
@@ -119,12 +121,6 @@ export function ChatSidebar({
 		Record<string, "like" | "dislike" | null>
 	>({})
 	const [expandedMemories, setExpandedMemories] = useState<string | null>(null)
-	const [followUpQuestions, setFollowUpQuestions] = useState<
-		Record<string, string[]>
-	>({})
-	const [loadingFollowUps, setLoadingFollowUps] = useState<
-		Record<string, boolean>
-	>({})
 	const [isInputExpanded, setIsInputExpanded] = useState(false)
 	const [isScrolledToBottom, setIsScrolledToBottom] = useState(true)
 	const [heightOffset, setHeightOffset] = useState(95)
@@ -136,25 +132,33 @@ export function ChatSidebar({
 	const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(
 		null,
 	)
-	const pendingFollowUpGenerations = useRef<Set<string>>(new Set())
 	const messagesContainerRef = useRef<HTMLDivElement>(null)
 	const sentQueuedMessageRef = useRef<string | null>(null)
 	const { selectedProject } = useProject()
+	const { allProjects } = useContainerTags()
+	const chatSpaceLabel = useMemo(
+		() =>
+			getChatSpaceDisplayLabel({
+				selectedProject,
+				allProjects,
+			}),
+		[selectedProject, allProjects],
+	)
 	const { viewMode } = useViewMode()
-	const { user } = useAuth()
+	const { user: _user } = useAuth()
 	const [threadId, setThreadId] = useQueryState("thread", threadParam)
 	const [fallbackChatId, setFallbackChatId] = useState(() => generateId())
 	const currentChatId = threadId ?? fallbackChatId
 	const chatIdRef = useRef(currentChatId)
 	chatIdRef.current = currentChatId
-	const setCurrentChatId = useCallback(
+	const _setCurrentChatId = useCallback(
 		(id: string) => setThreadId(id),
 		[setThreadId],
 	)
 	const chatTransport = useMemo(
 		() =>
 			new DefaultChatTransport({
-				api: `${process.env.NEXT_PUBLIC_BACKEND_URL ?? "https://api.supermemory.ai"}/chat/v2`,
+				api: `${process.env.NEXT_PUBLIC_BACKEND_URL ?? "https://api.supermemory.ai"}/chat`,
 				credentials: "include",
 				prepareSendMessagesRequest: ({ messages }) => ({
 					body: {
@@ -193,19 +197,31 @@ export function ChatSidebar({
 		return () => window.removeEventListener("scroll", handleWindowScroll)
 	}, [isMobile, viewMode])
 
-	const { messages, sendMessage, status, setMessages, stop } = useChat({
+	const {
+		messages,
+		sendMessage,
+		status,
+		setMessages,
+		stop,
+		error,
+		clearError,
+	} = useChat({
 		id: currentChatId ?? undefined,
 		transport: chatTransport,
-		onFinish: async (result) => {
-			if (result.message.role !== "assistant") return
-
-			// Mark this message as needing follow-up generation
-			// We'll generate it after the message is fully in the messages array
-			if (result.message.id) {
-				pendingFollowUpGenerations.current.add(result.message.id)
-			}
-		},
 	})
+
+	const chatStreamError = useMemo(
+		() => (error ? getNovaChatErrorCopy(error, selectedModel) : null),
+		[error, selectedModel],
+	)
+
+	const handleModelChange = useCallback(
+		(modelId: ModelId) => {
+			setSelectedModel(modelId)
+			clearError()
+		},
+		[clearError],
+	)
 
 	useEffect(() => {
 		if (pendingThreadLoad && currentChatId === pendingThreadLoad.id) {
@@ -213,100 +229,6 @@ export function ChatSidebar({
 			setPendingThreadLoad(null)
 		}
 	}, [currentChatId, pendingThreadLoad, setMessages])
-
-	// Generate follow-up questions after assistant messages are complete
-	useEffect(() => {
-		const generateFollowUps = async () => {
-			// Find assistant messages that need follow-up generation
-			const messagesToProcess = messages.filter(
-				(msg) =>
-					msg.role === "assistant" &&
-					pendingFollowUpGenerations.current.has(msg.id) &&
-					!followUpQuestions[msg.id] &&
-					!loadingFollowUps[msg.id],
-			)
-
-			for (const message of messagesToProcess) {
-				// Get complete text from the message
-				const assistantText = message.parts
-					.filter((p) => p.type === "text")
-					.map((p) => p.text)
-					.join(" ")
-					.trim()
-
-				// Only generate if we have substantial text (at least 50 chars)
-				// This ensures the message is complete, not just the first chunk
-				// Also check if status is idle to ensure streaming is complete
-				if (
-					assistantText.length < 50 ||
-					status === "streaming" ||
-					status === "submitted"
-				) {
-					continue
-				}
-
-				// Mark as processing
-				pendingFollowUpGenerations.current.delete(message.id)
-				setLoadingFollowUps((prev) => ({
-					...prev,
-					[message.id]: true,
-				}))
-
-				try {
-					// Get recent messages for context
-					const recentMessages = messages.slice(-5).map((msg) => ({
-						role: msg.role,
-						content: msg.parts
-							.filter((p) => p.type === "text")
-							.map((p) => p.text)
-							.join(" "),
-					}))
-
-					const response = await fetch(
-						`${process.env.NEXT_PUBLIC_BACKEND_URL}/chat/follow-ups`,
-						{
-							method: "POST",
-							headers: {
-								"Content-Type": "application/json",
-							},
-							credentials: "include",
-							body: JSON.stringify({
-								messages: recentMessages,
-								assistantResponse: assistantText,
-							}),
-						},
-					)
-
-					if (response.ok) {
-						const data = await response.json()
-						if (data.questions && Array.isArray(data.questions)) {
-							setFollowUpQuestions((prev) => ({
-								...prev,
-								[message.id]: data.questions,
-							}))
-						}
-					}
-				} catch (error) {
-					console.error("Failed to generate follow-up questions:", error)
-				} finally {
-					setLoadingFollowUps((prev) => ({
-						...prev,
-						[message.id]: false,
-					}))
-				}
-			}
-		}
-
-		// Only generate if not currently streaming or submitted
-		// Small delay to ensure message is fully processed
-		if (status !== "streaming" && status !== "submitted") {
-			const timeoutId = setTimeout(() => {
-				generateFollowUps()
-			}, 300)
-
-			return () => clearTimeout(timeoutId)
-		}
-	}, [messages, followUpQuestions, loadingFollowUps, status])
 
 	const checkIfScrolledToBottom = useCallback(() => {
 		if (!messagesContainerRef.current) return
@@ -646,11 +568,27 @@ export function ChatSidebar({
 								"linear-gradient(180deg, #0A0E14 40.49%, rgba(10, 14, 20, 0.00) 100%)",
 						}}
 					>
-						<ChatModelSelector
-							selectedModel={selectedModel}
-							onModelChange={setSelectedModel}
-						/>
-						<div className="flex items-center gap-2">
+						<div className="flex items-center gap-3 min-w-0 flex-1 mr-2">
+							<ChatModelSelector
+								selectedModel={selectedModel}
+								onModelChange={handleModelChange}
+							/>
+							<div
+								className={cn(
+									"inline-flex h-10 max-w-[min(192px,42vw)] shrink min-w-0 items-center rounded-full border border-[#73737333] bg-[#0D121A] px-3",
+									dmSansClassName(),
+								)}
+								style={{
+									boxShadow: "1.5px 1.5px 4.5px 0 rgba(0, 0, 0, 0.70) inset",
+								}}
+								title={chatSpaceLabel}
+							>
+								<span className="truncate text-sm text-white">
+									{chatSpaceLabel}
+								</span>
+							</div>
+						</div>
+						<div className="flex items-center gap-2 shrink-0">
 							<Dialog
 								open={isHistoryOpen}
 								onOpenChange={(open) => {
@@ -679,7 +617,7 @@ export function ChatSidebar({
 									<DialogHeader className="pb-4 border-b border-[#17181AB2]">
 										<DialogTitle>Chat History</DialogTitle>
 										<DialogDescription className="text-[#737373]">
-											Project: {selectedProject}
+											Space: {chatSpaceLabel}
 										</DialogDescription>
 									</DialogHeader>
 									<ScrollArea className="max-h-96">
@@ -794,7 +732,7 @@ export function ChatSidebar({
 									</span>
 								)}
 							</Button>
-							<motion.button
+							{/*<motion.button
 								onClick={toggleChat}
 								className={cn(
 									"flex items-center gap-2 rounded-full p-2 text-xs text-white cursor-pointer",
@@ -815,7 +753,7 @@ export function ChatSidebar({
 								) : (
 									<PanelRightCloseIcon className="size-4" />
 								)}
-							</motion.button>
+							</motion.button>*/}
 						</div>
 					</div>
 					<div
@@ -879,19 +817,10 @@ export function ChatSidebar({
 											copiedMessageId={copiedMessageId}
 											messageFeedback={messageFeedback}
 											expandedMemories={expandedMemories}
-											followUpQuestions={followUpQuestions[message.id] || []}
-											isLoadingFollowUps={loadingFollowUps[message.id] || false}
 											onCopy={handleCopyMessage}
 											onLike={handleLikeMessage}
 											onDislike={handleDislikeMessage}
 											onToggleMemories={handleToggleMemories}
-											onQuestionClick={(question) => {
-												analytics.chatFollowUpClicked({
-													thread_id: currentChatId || undefined,
-												})
-												analytics.chatMessageSent({ source: "follow_up" })
-												setInput(question)
-											}}
 										/>
 									)}
 								</div>
@@ -915,6 +844,57 @@ export function ChatSidebar({
 									<ChevronDownIcon className="size-4 text-white" />
 								</div>
 							</button>
+						</div>
+					)}
+
+					{chatStreamError && (
+						<div
+							role="alert"
+							className={cn(
+								"mx-4 mb-2 rounded-lg bg-amber-950/40 px-3 py-2 text-sm text-amber-50/95",
+								dmSansClassName(),
+							)}
+						>
+							<div className="flex justify-between gap-2 items-start">
+								<div className="min-w-0">
+									<p className="font-medium leading-snug">
+										{chatStreamError.title}
+									</p>
+									<p className="text-xs text-amber-100/70 mt-1 leading-snug">
+										{chatStreamError.body}
+									</p>
+									{chatStreamError.otherModels.length > 0 && (
+										<div className="flex flex-wrap gap-2 mt-2">
+											{chatStreamError.otherModels.map((id) => {
+												const m = modelNames[id]
+												return (
+													<Button
+														key={id}
+														type="button"
+														size="sm"
+														variant="secondary"
+														className="h-8 text-xs rounded-full bg-[#141922] border-[#73737333] hover:bg-[#1a2230] text-white/90"
+														onClick={() => {
+															handleModelChange(id)
+															analytics.modelChanged({ model: id })
+														}}
+													>
+														Switch to {m.name} {m.version}
+													</Button>
+												)
+											})}
+										</div>
+									)}
+								</div>
+								<button
+									type="button"
+									onClick={clearError}
+									className="shrink-0 p-1 rounded-md text-amber-200/50 hover:text-amber-100/90 hover:bg-white/5"
+									aria-label="Dismiss error"
+								>
+									<XIcon className="size-4" />
+								</button>
+							</div>
 						</div>
 					)}
 

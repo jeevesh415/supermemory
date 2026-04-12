@@ -135,7 +135,15 @@
 					{
 						"anchor": "Supermemory MCP",
 						"icon": "terminal",
-						"pages": ["supermemory-mcp/mcp", "supermemory-mcp/setup"]
+						"pages": [
+							"supermemory-mcp/mcp",
+							"supermemory-mcp/setup",
+							{
+								"group": "Setups",
+								"icon": "layers",
+								"pages": ["supermemory-mcp/claude-desktop"]
+							}
+						]
 					}
 				],
 				"tab": "Developer Platform"
@@ -175,7 +183,8 @@
 						"pages": [
 							"integrations/openclaw",
 							"integrations/claude-code",
-							"integrations/opencode"
+							"integrations/opencode",
+							"integrations/hermes"
 						]
 					}
 				],
@@ -216,7 +225,11 @@
 							},
 							{
 								"group": "Reference",
-								"pages": ["memorybench/cli", "memorybench/integrations"]
+								"pages": [
+									"memorybench/memscore",
+									"memorybench/cli",
+									"memorybench/integrations"
+								]
 							}
 						]
 					}
@@ -252,7 +265,7 @@
 				"anchors": [
 					{
 						"anchor": "Changelog",
-						"pages": ["changelog/overview", "changelog/developer-platform"]
+						"pages": ["changelog/overview"]
 					}
 				],
 				"tab": "Changelog"
@@ -260,6 +273,11 @@
 		]
 	},
 	"redirects": [
+		{
+			"destination": "/changelog/overview",
+			"permanent": true,
+			"source": "/changelog/developer-platform"
+		},
 		{
 			"destination": "/integrations/openclaw",
 			"permanent": true,

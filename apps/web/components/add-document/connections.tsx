@@ -1,7 +1,7 @@
 "use client"
 
 import { $fetch } from "@lib/api"
-import { fetchConnectionsFeature } from "@lib/queries"
+import { hasActivePlan } from "@lib/queries"
 import type { ConnectionResponseSchema } from "@repo/validation/api"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { GoogleDrive, Notion, OneDrive } from "@ui/assets/icons"
@@ -51,7 +51,7 @@ interface ConnectContentProps {
 export function ConnectContent({ selectedProject }: ConnectContentProps) {
 	const queryClient = useQueryClient()
 	const autumn = useCustomer()
-	const [isProUser, setIsProUser] = useState(false)
+	const isProUser = hasActivePlan(autumn.customer?.products, "api_pro")
 	const [connectingProvider, setConnectingProvider] =
 		useState<ConnectorProvider | null>(null)
 	const [isUpgrading, setIsUpgrading] = useState(false)
@@ -59,17 +59,6 @@ export function ConnectContent({ selectedProject }: ConnectContentProps) {
 		open: boolean
 		connection: Connection | null
 	}>({ open: false, connection: null })
-
-	// Check Pro status
-	useEffect(() => {
-		if (!autumn.isLoading) {
-			setIsProUser(
-				autumn.customer?.products?.some(
-					(product) => product.id === "api_pro",
-				) ?? false,
-			)
-		}
-	}, [autumn.isLoading, autumn.customer])
 
 	const handleUpgrade = async () => {
 		setIsUpgrading(true)
@@ -85,13 +74,9 @@ export function ConnectContent({ selectedProject }: ConnectContentProps) {
 		}
 	}
 
-	// Check connections feature limits
-	const { data: connectionsCheck } = fetchConnectionsFeature(
-		autumn,
-		!autumn.isLoading,
-	)
-	const connectionsUsed = connectionsCheck?.balance ?? 0
-	const connectionsLimit = connectionsCheck?.included_usage ?? 0
+	const connectionsFeature = autumn.customer?.features?.connections
+	const connectionsUsed = connectionsFeature?.usage ?? 0
+	const connectionsLimit = connectionsFeature?.included_usage ?? 10
 	const canAddConnection = connectionsUsed < connectionsLimit
 
 	// Fetch connections

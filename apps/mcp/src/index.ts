@@ -1,5 +1,5 @@
 import { cors } from "hono/cors"
-import { Hono } from "hono"
+import { Hono, type Context } from "hono"
 import { SupermemoryMCP } from "./server"
 import { isApiKey, validateApiKey, validateOAuthToken } from "./auth"
 import { initPosthog } from "./posthog"
@@ -28,8 +28,17 @@ app.use(
 	"*",
 	cors({
 		origin: "*",
-		allowMethods: ["GET", "POST", "OPTIONS"],
-		allowHeaders: ["Content-Type", "Authorization", "x-sm-project"],
+		allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+		allowHeaders: [
+			"Content-Type",
+			"Authorization",
+			"x-sm-project",
+			"Accept",
+			"Mcp-Session-Id",
+			"MCP-Protocol-Version",
+			"Last-Event-ID",
+		],
+		exposeHeaders: ["Mcp-Session-Id", "WWW-Authenticate"],
 	}),
 )
 
@@ -50,10 +59,9 @@ app.get("/", (c) => {
 // MCP clients use this to discover the authorization server
 app.get("/.well-known/oauth-protected-resource", (c) => {
 	const apiUrl = c.env.API_URL || DEFAULT_API_URL
-	const resourceUrl =
-		c.env.API_URL === "http://localhost:8787"
-			? "http://localhost:8788"
-			: "https://mcp.supermemory.ai"
+	const host = c.req.header("x-forwarded-host") || c.req.header("host")
+	const proto = c.req.header("x-forwarded-proto") || "https"
+	const resourceUrl = host ? `${proto}://${host}` : "https://mcp.supermemory.ai"
 
 	return c.json({
 		resource: resourceUrl,
@@ -91,27 +99,35 @@ app.get("/.well-known/oauth-authorization-server", async (c) => {
 	}
 })
 
-const mcpHandler = SupermemoryMCP.mount("/mcp", {
+const mcpHandler = SupermemoryMCP.serve("/mcp", {
 	binding: "MCP_SERVER",
 	corsOptions: {
 		origin: "*",
-		methods: "GET, POST, OPTIONS",
-		headers: "Content-Type, Authorization, x-sm-project",
+		methods: "GET, POST, DELETE, OPTIONS",
+		headers:
+			"Content-Type, Authorization, x-sm-project, Accept, Mcp-Session-Id, MCP-Protocol-Version, Last-Event-ID",
 	},
 })
 
-app.all("/mcp/*", async (c) => {
+const handleMcpRequest = async (c: Context<{ Bindings: Bindings }>) => {
 	const authHeader = c.req.header("Authorization")
 	const token = authHeader?.replace(/^Bearer\s+/i, "")
 	const containerTag = c.req.header("x-sm-project")
 	const apiUrl = c.env.API_URL || DEFAULT_API_URL
 
+	const reqHost = c.req.header("x-forwarded-host") || c.req.header("host") || ""
+	const reqProto = c.req.header("x-forwarded-proto") || "https"
+	const resourceMetadataUrl = reqHost
+		? `${reqProto}://${reqHost}/.well-known/oauth-protected-resource`
+		: "/.well-known/oauth-protected-resource"
+
 	if (!token) {
 		return new Response("Unauthorized", {
 			status: 401,
 			headers: {
-				"WWW-Authenticate": `Bearer resource_metadata="/.well-known/oauth-protected-resource"`,
+				"WWW-Authenticate": `Bearer resource_metadata="${resourceMetadataUrl}"`,
 				"Access-Control-Expose-Headers": "WWW-Authenticate",
+				"Access-Control-Allow-Origin": "*",
 			},
 		})
 	}
@@ -149,8 +165,9 @@ app.all("/mcp/*", async (c) => {
 				status: 401,
 				headers: {
 					"Content-Type": "application/json",
-					"WWW-Authenticate": `Bearer error="invalid_token", resource_metadata="/.well-known/oauth-protected-resource"`,
+					"WWW-Authenticate": `Bearer error="invalid_token", resource_metadata="${resourceMetadataUrl}"`,
 					"Access-Control-Expose-Headers": "WWW-Authenticate",
+					"Access-Control-Allow-Origin": "*",
 				},
 			},
 		)
@@ -169,7 +186,10 @@ app.all("/mcp/*", async (c) => {
 	} as ExecutionContext & { props: Props }
 
 	return mcpHandler.fetch(c.req.raw, c.env, ctx)
-})
+}
+
+app.all("/mcp", handleMcpRequest)
+app.all("/mcp/*", handleMcpRequest)
 
 // Export the Durable Object class for Cloudflare Workers
 export { SupermemoryMCP }

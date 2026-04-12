@@ -1,5 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import type { useCustomer } from "autumn-js/react"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import type { z } from "zod"
 import type { DocumentsWithMemoriesResponseSchema } from "../validation/api"
@@ -8,103 +7,52 @@ import { $fetch } from "./api"
 type DocumentsResponse = z.infer<typeof DocumentsWithMemoriesResponseSchema>
 type DocumentWithMemories = DocumentsResponse["documents"][0]
 
-export const fetchSubscriptionStatus = (
-	autumn: ReturnType<typeof useCustomer>,
-	isEnabled: boolean,
-) =>
-	useQuery({
-		queryFn: async () => {
-			const allPlans = ["api_pro", "api_scale", "api_enterprise"]
-			const statusMap: Record<
-				string,
-				{ allowed: boolean; status: string | null }
-			> = {}
+export const PLAN_TIERS = ["api_pro", "api_scale", "api_enterprise"] as const
+export type PlanTier = (typeof PLAN_TIERS)[number]
 
-			await Promise.all(
-				allPlans.map(async (plan) => {
-					try {
-						const res = autumn.check({
-							productId: plan,
-						})
-						const allowed = res.data?.allowed ?? false
+export type SubscriptionStatusMap = Record<
+	string,
+	{ allowed: boolean; status: string | null }
+>
 
-						const product = autumn.customer?.products?.find(
-							(p) => p.id === plan,
-						)
-						const productStatus = product?.status ?? null
+const DEFAULT_SUBSCRIPTION_STATUS: SubscriptionStatusMap = {
+	api_pro: { allowed: false, status: null },
+	api_scale: { allowed: false, status: null },
+	api_enterprise: { allowed: false, status: null },
+}
 
-						statusMap[plan] = {
-							allowed,
-							status: productStatus,
-						}
-					} catch (error) {
-						console.error(`Error checking status for ${plan}:`, error)
-						statusMap[plan] = { allowed: false, status: null }
-					}
-				}),
-			)
-
-			return statusMap
-		},
-		queryKey: ["subscription-status"],
-		refetchInterval: 60 * 1000, // Refetch every 1 minute
-		staleTime: 55 * 1000, // Consider data stale after 55 seconds
-		enabled: isEnabled,
+export function isAllowedFrom(
+	status: SubscriptionStatusMap,
+	minimumTier: PlanTier,
+): boolean {
+	const minIndex = PLAN_TIERS.indexOf(minimumTier)
+	return PLAN_TIERS.slice(minIndex).some((tier) => {
+		const s = status[tier]
+		return s?.status === "active"
 	})
+}
 
-// Feature checks
-export const fetchMemoriesFeature = (
-	autumn: ReturnType<typeof useCustomer>,
-	isEnabled: boolean,
-) =>
-	useQuery({
-		queryFn: async () => {
-			const res = autumn.check({ featureId: "memories" })
-			return res.data
-		},
-		queryKey: ["autumn-feature", "memories"],
-		staleTime: 30 * 1000, // 30 seconds
-		gcTime: 5 * 60 * 1000, // 5 minutes
-		enabled: isEnabled,
-	})
+export function getSubscriptionStatus(
+	products: Array<{ id: string; status: string }> | undefined,
+): SubscriptionStatusMap {
+	const statusMap: SubscriptionStatusMap = { ...DEFAULT_SUBSCRIPTION_STATUS }
+	if (!products) return statusMap
+	for (const tier of PLAN_TIERS) {
+		const product = products.find((p) => p.id === tier)
+		statusMap[tier] = {
+			allowed: product?.status === "active",
+			status: product?.status ?? null,
+		}
+	}
+	return statusMap
+}
 
-export const fetchConnectionsFeature = (
-	autumn: ReturnType<typeof useCustomer>,
-	isEnabled: boolean,
-) =>
-	useQuery({
-		queryFn: async () => {
-			const res = autumn.check({ featureId: "connections" })
-			return res.data
-		},
-		queryKey: ["autumn-feature", "connections"],
-		staleTime: 30 * 1000, // 30 seconds
-		gcTime: 5 * 60 * 1000, // 5 minutes
-		enabled: isEnabled,
-	})
-
-// Product checks
-export const fetchApiProProduct = (autumn: ReturnType<typeof useCustomer>) =>
-	useQuery({
-		queryFn: async () => {
-			const res = autumn.check({ productId: "api_pro" })
-			return res.data
-		},
-		queryKey: ["autumn-product", "api_pro"],
-		staleTime: 30 * 1000, // 30 seconds
-		gcTime: 5 * 60 * 1000, // 5 minutes
-	})
-
-export const fetchProProduct = (autumn: ReturnType<typeof useCustomer>) =>
-	useQuery({
-		queryFn: async () => {
-			const res = autumn.check({ productId: "pro" })
-			return res.data
-		},
-		queryKey: ["autumn-product", "pro"],
-		staleTime: 30 * 1000, // 30 seconds
-		gcTime: 5 * 60 * 1000, // 5 minutes
-	})
+export function hasActivePlan(
+	products: Array<{ id: string; status: string }> | undefined,
+	minimumTier: PlanTier,
+): boolean {
+	return isAllowedFrom(getSubscriptionStatus(products), minimumTier)
+}
 
 export const useDeleteDocument = (selectedProject: string) => {
 	const queryClient = useQueryClient()

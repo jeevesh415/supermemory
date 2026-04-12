@@ -41,6 +41,8 @@ import {
 	fullscreenParam,
 	chatParam,
 	integrationParam,
+	pluginsPanelParam,
+	type IntegrationParamValue,
 } from "@/lib/search-params"
 
 type DocumentsResponse = z.infer<typeof DocumentsWithMemoriesResponseSchema>
@@ -66,8 +68,13 @@ function ViewErrorFallback() {
 export default function NewPage() {
 	const isMobile = useIsMobile()
 	const { user, session } = useAuth()
-	const { selectedProject, isNovaSpaces, novaContainerTags, selectedProjects } =
-		useProject()
+	const {
+		selectedProject,
+		isNovaSpaces,
+		novaContainerTags,
+		selectedProjects,
+		setSelectedProjects,
+	} = useProject()
 	const selectedProjectTag = selectedProjects[0]
 	const isNovaContext =
 		isNovaSpaces ||
@@ -81,6 +88,12 @@ export default function NewPage() {
 				: (allProjects.find((p) => p.containerTag === selectedProjectTag)
 						?.name ?? selectedProjectTag)
 			: undefined
+
+	const handleSwitchToAllSpacesFromEmptyState = useCallback(() => {
+		analytics.spaceSwitched({ space_id: "nova_spaces" })
+		setSelectedProjects([])
+	}, [setSelectedProjects])
+
 	const { viewMode, setViewMode } = useViewMode()
 	const queryClient = useQueryClient()
 
@@ -110,7 +123,17 @@ export default function NewPage() {
 		fullscreenParam,
 	)
 	const [isChatOpen, setIsChatOpen] = useQueryState("chat", chatParam)
-	const [, setIntegration] = useQueryState("integration", integrationParam)
+	const [integrationFromUrl, setIntegration] = useQueryState(
+		"integration",
+		integrationParam,
+	)
+	const [pluginsPanelFromUrl] = useQueryState("plugins", pluginsPanelParam)
+
+	useEffect(() => {
+		if (integrationFromUrl || pluginsPanelFromUrl === true) {
+			void setViewMode("integrations")
+		}
+	}, [integrationFromUrl, pluginsPanelFromUrl, setViewMode])
 
 	// Ephemeral local state (not worth URL-encoding)
 	const [fullscreenInitialContent, setFullscreenInitialContent] = useState("")
@@ -367,7 +390,7 @@ export default function NewPage() {
 	)
 
 	const handleOpenIntegrations = useCallback(
-		(integration?: "import" | "chrome" | "connections") => {
+		(integration?: IntegrationParamValue) => {
 			setViewMode("integrations")
 			if (integration) {
 				setIntegration(integration)
@@ -466,6 +489,9 @@ export default function NewPage() {
 														onOpenIntegrations: handleOpenIntegrations,
 														isAllSpaces: isNovaSpaces,
 														spaceName: emptyStateSpaceName,
+														onSwitchToAllSpaces: isNovaSpaces
+															? undefined
+															: handleSwitchToAllSpacesFromEmptyState,
 													}
 												: undefined
 										}
