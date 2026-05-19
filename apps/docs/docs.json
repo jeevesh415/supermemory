@@ -144,6 +144,28 @@
 								"pages": ["supermemory-mcp/claude-desktop"]
 							}
 						]
+					},
+					{
+						"anchor": "SMFS",
+						"icon": "database",
+						"pages": [
+							"smfs/overview",
+							"smfs/install",
+							"smfs/mount",
+							"smfs/bash-tool",
+							"smfs/bash-tool-python",
+							{
+								"group": "Providers",
+								"icon": "cloud",
+								"pages": [
+									"smfs/providers/daytona",
+									"smfs/providers/e2b",
+									"smfs/providers/vercel",
+									"smfs/providers/cloudflare"
+								]
+							},
+							"smfs/examples"
+						]
 					}
 				],
 				"tab": "Developer Platform"
@@ -162,6 +184,7 @@
 							"integrations/agent-framework",
 							"integrations/mastra",
 							"integrations/voltagent",
+							"integrations/convex",
 							"integrations/langchain",
 							"integrations/crewai",
 							"integrations/agno",
@@ -170,7 +193,12 @@
 							"integrations/pipecat",
 							"integrations/n8n",
 							"integrations/viasocket",
-							"integrations/zapier"
+							"integrations/zapier",
+							{
+								"group": "Migration Guides",
+								"icon": "arrow-up-right",
+								"pages": ["migration/tools-v2-upgrade"]
+							}
 						]
 					}
 				],
@@ -185,6 +213,7 @@
 							"integrations/openclaw",
 							"integrations/claude-code",
 							"integrations/opencode",
+							"integrations/codex",
 							"integrations/hermes"
 						]
 					}

@@ -1,7 +1,7 @@
 "use client"
 
 import { useInfiniteQuery } from "@tanstack/react-query"
-import { useMemo } from "react"
+import { useEffect, useMemo } from "react"
 import { $fetch } from "@lib/api"
 import type {
 	GraphApiDocument,
@@ -13,7 +13,9 @@ const PAGE_SIZE = 100
 
 interface UseGraphApiOptions {
 	containerTags?: string[]
+	documentIds?: string[]
 	enabled?: boolean
+	autoFetchAll?: boolean
 }
 
 interface ApiMemoryEntry {
@@ -81,7 +83,20 @@ function toGraphMemory(mem: ApiMemoryEntry): GraphApiMemory {
 	}
 }
 
-function toGraphDocument(doc: ApiDocument): GraphApiDocument {
+function toGraphDocument(
+	doc: ApiDocument,
+	containerTags?: string[],
+): GraphApiDocument {
+	const allowedContainerTags = new Set(containerTags?.filter(Boolean) ?? [])
+	const memoryEntries =
+		allowedContainerTags.size > 0
+			? doc.memoryEntries.filter(
+					(mem) =>
+						mem.spaceContainerTag != null &&
+						allowedContainerTags.has(mem.spaceContainerTag),
+				)
+			: doc.memoryEntries
+
 	return {
 		id: doc.id,
 		title: doc.title,
@@ -89,12 +104,20 @@ function toGraphDocument(doc: ApiDocument): GraphApiDocument {
 		documentType: doc.type,
 		createdAt: doc.createdAt,
 		updatedAt: doc.updatedAt,
-		memories: doc.memoryEntries.map(toGraphMemory),
+		memories: memoryEntries.map(toGraphMemory),
 	}
 }
 
 export function useGraphApi(options: UseGraphApiOptions = {}) {
-	const { containerTags, enabled = true } = options
+	const {
+		containerTags,
+		documentIds,
+		enabled = true,
+		autoFetchAll = false,
+	} = options
+	const filteredDocumentIds = documentIds?.filter(Boolean)
+	const hasDocumentIds =
+		filteredDocumentIds != null && filteredDocumentIds.length > 0
 
 	const {
 		data,
@@ -104,19 +127,33 @@ export function useGraphApi(options: UseGraphApiOptions = {}) {
 		hasNextPage,
 		fetchNextPage,
 	} = useInfiniteQuery<ApiDocumentsResponse, Error>({
-		queryKey: ["documents-with-memories", containerTags, []],
+		queryKey: [
+			"documents-with-memories",
+			containerTags,
+			[],
+			filteredDocumentIds,
+		],
 		initialPageParam: 1,
 		queryFn: async ({ pageParam }) => {
-			const response = await $fetch("@post/documents/documents", {
-				body: {
-					page: pageParam as number,
-					limit: PAGE_SIZE,
-					sort: "createdAt",
-					order: "desc",
-					containerTags,
-				},
-				disableValidation: true,
-			})
+			const response = hasDocumentIds
+				? await $fetch("@post/documents/documents/by-ids", {
+						body: {
+							ids: filteredDocumentIds,
+							by: "id",
+							containerTags,
+						},
+						disableValidation: true,
+					})
+				: await $fetch("@post/documents/documents", {
+						body: {
+							page: pageParam as number,
+							limit: PAGE_SIZE,
+							sort: "createdAt",
+							order: "desc",
+							containerTags,
+						},
+						disableValidation: true,
+					})
 
 			if (response.error) {
 				throw new Error(response.error?.message || "Failed to fetch documents")
@@ -132,10 +169,25 @@ export function useGraphApi(options: UseGraphApiOptions = {}) {
 		enabled,
 	})
 
+	useEffect(() => {
+		if (!autoFetchAll || !enabled) return
+		if (!hasNextPage || isPending || isFetchingNextPage) return
+		fetchNextPage()
+	}, [
+		autoFetchAll,
+		enabled,
+		hasNextPage,
+		isPending,
+		isFetchingNextPage,
+		fetchNextPage,
+	])
+
 	const documents = useMemo(() => {
 		if (!data?.pages) return []
-		return data.pages.flatMap((page) => page.documents.map(toGraphDocument))
-	}, [data])
+		return data.pages.flatMap((page) =>
+			page.documents.map((doc) => toGraphDocument(doc, containerTags)),
+		)
+	}, [data, containerTags])
 
 	const totalCount = data?.pages[0]?.pagination.totalItems ?? 0
 
